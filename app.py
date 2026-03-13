@@ -7,9 +7,6 @@ app = Flask(__name__)
 
 DB_FILE = "fighters.json"
 
-# --------------------------------------------------
-# Load fighter database with robust name handling
-# --------------------------------------------------
 fighter_list = []
 fighters = {}
 debug_info = {
@@ -20,18 +17,30 @@ debug_info = {
     "data_type": "none",
     "raw_count": 0,
     "loaded_count": 0,
+    "sample_keys": [],
+    "sample_item": None,
     "error": "",
     "repo_files": sorted(os.listdir(".")),
 }
 
-def build_fighter_name(fighter: dict) -> str:
-    # Prefer explicit name
-    name = str(fighter.get("name", "")).strip()
-    if name:
-        return name
+def build_fighter_name(fighter):
+    if not isinstance(fighter, dict):
+        return ""
+
+    # try common name fields
+    for key in ["name", "fighter_name", "full_name"]:
+        value = str(fighter.get(key, "")).strip()
+        if value:
+            return value
 
     first = str(fighter.get("first_name", "")).strip()
     last = str(fighter.get("last_name", "")).strip()
+    combined = f"{first} {last}".strip()
+    if combined:
+        return combined
+
+    first = str(fighter.get("firstname", "")).strip()
+    last = str(fighter.get("lastname", "")).strip()
     combined = f"{first} {last}".strip()
     if combined:
         return combined
@@ -61,6 +70,16 @@ try:
         else:
             debug_info["data_type"] = str(type(data))
 
+        if fighter_list:
+            first_item = fighter_list[0]
+            if isinstance(first_item, dict):
+                debug_info["sample_keys"] = list(first_item.keys())[:25]
+                debug_info["sample_item"] = {
+                    k: first_item[k] for k in list(first_item.keys())[:10]
+                }
+            else:
+                debug_info["sample_item"] = str(first_item)
+
     for fighter in fighter_list:
         if not isinstance(fighter, dict):
             continue
@@ -78,9 +97,6 @@ except Exception as e:
     debug_info["error"] = str(e)
 
 
-# --------------------------------------------------
-# Helpers
-# --------------------------------------------------
 def clamp(value, low, high):
     return max(low, min(high, value))
 
@@ -110,7 +126,6 @@ def normalize_fighter_stats(f):
     ko_rate = get_float(f.get("ko_rate"), 0.20)
     sub_rate = get_float(f.get("sub_rate"), 0.10)
     decision_rate = get_float(f.get("decision_rate"), 0.70)
-    finish_rate = get_float(f.get("finish_rate"), ko_rate + sub_rate)
 
     win_rate = wins / total_fights if total_fights > 0 else 0.5
     experience_factor = clamp(total_fights / 20.0, 0.4, 1.2)
@@ -128,7 +143,6 @@ def normalize_fighter_stats(f):
         "ko_rate": ko_rate,
         "sub_rate": sub_rate,
         "decision_rate": decision_rate,
-        "finish_rate": finish_rate,
         "win_rate": win_rate,
         "experience_factor": experience_factor,
     }
@@ -156,7 +170,6 @@ def build_matchup_probabilities(a_raw, b_raw, rounds):
         + a["win_rate"] * 1.0
         + a["experience_factor"] * 0.5
     )
-
     b_total = (
         b_strike_score * 1.2
         + b_grapple_score * 0.9
@@ -231,7 +244,6 @@ def monte_carlo(fighter_a, fighter_b, rounds, runs):
         + method_percentages[f"{fighter_a} Decision"],
         2
     )
-
     fighter_b_win_pct = round(
         method_percentages[f"{fighter_b} KO/TKO"]
         + method_percentages[f"{fighter_b} Submission"]
@@ -262,66 +274,21 @@ HOME_HTML = """
     <title>UFC Sim</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <style>
-        body {
-            font-family: Arial, sans-serif;
-            background: #0b0d12;
-            color: white;
-            margin: 0;
-            padding: 40px 20px;
-        }
-        .wrap {
-            max-width: 900px;
-            margin: 0 auto;
-        }
-        h1 {
-            margin-top: 0;
-            font-size: 48px;
-        }
-        p {
-            color: #b9c0cc;
-        }
-        form {
-            background: #161a22;
-            padding: 24px;
-            border-radius: 16px;
-            margin-top: 20px;
-        }
-        label {
-            display: block;
-            margin-bottom: 8px;
-            font-weight: bold;
-        }
-        select, input, button {
-            width: 100%;
-            padding: 14px;
-            margin-bottom: 18px;
-            border-radius: 10px;
-            border: none;
-            font-size: 16px;
-        }
-        button {
-            background: #ff9800;
-            color: black;
-            font-weight: bold;
-            cursor: pointer;
-        }
-        .debug {
-            margin-top: 24px;
-            background: #161a22;
-            padding: 18px;
-            border-radius: 16px;
-        }
-        .debug pre {
-            white-space: pre-wrap;
-            word-break: break-word;
-            color: #9fd3ff;
-        }
+        body { font-family: Arial, sans-serif; background: #0b0d12; color: white; margin: 0; padding: 40px 20px; }
+        .wrap { max-width: 900px; margin: 0 auto; }
+        h1 { margin-top: 0; font-size: 48px; }
+        p { color: #b9c0cc; }
+        form { background: #161a22; padding: 24px; border-radius: 16px; margin-top: 20px; }
+        label { display: block; margin-bottom: 8px; font-weight: bold; }
+        select, input, button { width: 100%; padding: 14px; margin-bottom: 18px; border-radius: 10px; border: none; font-size: 16px; }
+        button { background: #ff9800; color: black; font-weight: bold; cursor: pointer; }
+        .debug { margin-top: 24px; background: #161a22; padding: 18px; border-radius: 16px; }
+        .debug pre { white-space: pre-wrap; word-break: break-word; color: #9fd3ff; }
     </style>
 </head>
 <body>
     <div class="wrap">
         <h1>UFC Fight Simulator</h1>
-        <p>Real fighter database loaded from fighters.json</p>
         <p>Fighters in database: <strong>{{ fighter_count }}</strong></p>
 
         <form action="/simulate" method="get">
@@ -360,7 +327,6 @@ HOME_HTML = """
 </html>
 """
 
-
 @app.route("/")
 def home():
     fighter_names = sorted(fighters.keys())
@@ -370,7 +336,6 @@ def home():
         fighter_count=len(fighter_names),
         debug_info=json.dumps(debug_info, indent=2),
     )
-
 
 @app.route("/simulate")
 def simulate():
@@ -397,7 +362,6 @@ def simulate():
 
     results = monte_carlo(fighter_a, fighter_b, rounds, runs)
     return jsonify(results)
-
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
