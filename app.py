@@ -8,7 +8,7 @@ app = Flask(__name__)
 DB_FILE = "fighters.json"
 
 # --------------------------------------------------
-# Load fighter database with debugging
+# Load fighter database with robust name handling
 # --------------------------------------------------
 fighter_list = []
 fighters = {}
@@ -23,6 +23,20 @@ debug_info = {
     "error": "",
     "repo_files": sorted(os.listdir(".")),
 }
+
+def build_fighter_name(fighter: dict) -> str:
+    # Prefer explicit name
+    name = str(fighter.get("name", "")).strip()
+    if name:
+        return name
+
+    first = str(fighter.get("first_name", "")).strip()
+    last = str(fighter.get("last_name", "")).strip()
+    combined = f"{first} {last}".strip()
+    if combined:
+        return combined
+
+    return ""
 
 try:
     if os.path.exists(DB_FILE):
@@ -48,10 +62,15 @@ try:
             debug_info["data_type"] = str(type(data))
 
     for fighter in fighter_list:
-        if isinstance(fighter, dict):
-            name = fighter.get("name")
-            if name:
-                fighters[name] = fighter
+        if not isinstance(fighter, dict):
+            continue
+
+        name = build_fighter_name(fighter)
+        if not name:
+            continue
+
+        fighter["name"] = name
+        fighters[name] = fighter
 
     debug_info["loaded_count"] = len(fighters)
 
