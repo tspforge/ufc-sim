@@ -1,329 +1,366 @@
+from flask import Flask, request, jsonify, render_template_string
 import json
-import re
-import string
-import time
-from dataclasses import dataclass, asdict
-from typing import Dict, List, Optional
+import os
+import random
 
-import requests
-from bs4 import BeautifulSoup
+app = Flask(__name__)
 
-BASE = "http://ufcstats.com"
-HEADERS = {
-    "User-Agent": "Mozilla/5.0"
+DB_FILE = "fighters.json"
+
+fighter_list = []
+fighters = {}
+debug_info = {
+    "db_file": DB_FILE,
+    "cwd": os.getcwd(),
+    "file_exists": os.path.exists(DB_FILE),
+    "file_size": 0,
+    "data_type": "none",
+    "raw_count": 0,
+    "loaded_count": 0,
+    "sample_keys": [],
+    "sample_item": None,
+    "error": "",
+    "repo_files": sorted(os.listdir(".")),
 }
 
+def build_fighter_name(fighter):
+    if not isinstance(fighter, dict):
+        return ""
 
-@dataclass
-class FighterRecord:
-    name: str
-    first_name: str
-    last_name: str
-    profile_url: str
-    height: Optional[str] = None
-    weight: Optional[str] = None
-    reach: Optional[str] = None
-    stance: Optional[str] = None
-    dob: Optional[str] = None
+    for key in ["name", "fighter_name", "full_name"]:
+        value = str(fighter.get(key, "")).strip()
+        if value:
+            return value
 
-    slpm: Optional[float] = None
-    str_acc: Optional[float] = None
-    sapm: Optional[float] = None
-    str_def: Optional[float] = None
-    td_avg: Optional[float] = None
-    td_acc: Optional[float] = None
-    td_def: Optional[float] = None
-    sub_avg: Optional[float] = None
+    first = str(fighter.get("first_name", "")).strip()
+    last = str(fighter.get("last_name", "")).strip()
+    combined = f"{first} {last}".strip()
+    if combined:
+        return combined
 
-    total_fights: int = 0
-    wins: int = 0
-    losses: int = 0
-    draws: int = 0
+    first = str(fighter.get("firstname", "")).strip()
+    last = str(fighter.get("lastname", "")).strip()
+    combined = f"{first} {last}".strip()
+    if combined:
+        return combined
 
-    ko_wins: int = 0
-    sub_wins: int = 0
-    dec_wins: int = 0
+    return ""
 
-    ko_rate: float = 0.0
-    sub_rate: float = 0.0
-    decision_rate: float = 0.0
-    finish_rate: float = 0.0
+try:
+    if os.path.exists(DB_FILE):
+        debug_info["file_size"] = os.path.getsize(DB_FILE)
 
+        with open(DB_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
 
-def get_soup(url: str) -> BeautifulSoup:
-    r = requests.get(url, headers=HEADERS, timeout=30)
-    r.raise_for_status()
-    return BeautifulSoup(r.text, "html.parser")
+        if isinstance(data, list):
+            fighter_list = data
+            debug_info["data_type"] = "list"
+            debug_info["raw_count"] = len(data)
 
+        elif isinstance(data, dict):
+            debug_info["data_type"] = "dict"
+            if "fighters" in data and isinstance(data["fighters"], list):
+                fighter_list = data["fighters"]
+                debug_info["raw_count"] = len(fighter_list)
+            else:
+                debug_info["raw_count"] = len(data)
 
-def clean_text(text: str) -> str:
-    return re.sub(r"\s+", " ", text).strip()
-
-
-def parse_pct(text: str) -> Optional[float]:
-    text = clean_text(text).replace("%", "")
-    if not text or text == "--":
-        return None
-    try:
-        return float(text)
-    except ValueError:
-        return None
-
-
-def parse_float(text: str) -> Optional[float]:
-    text = clean_text(text)
-    if not text or text == "--":
-        return None
-    try:
-        return float(text)
-    except ValueError:
-        return None
-
-
-def split_name(full_name: str) -> tuple[str, str]:
-    parts = full_name.strip().split()
-    if not parts:
-        return "", ""
-    if len(parts) == 1:
-        return parts[0], ""
-    return parts[0], " ".join(parts[1:])
-
-
-def get_all_fighters() -> List[Dict[str, str]]:
-    fighters = []
-    seen = set()
-
-    for ch in string.ascii_lowercase:
-        url = f"{BASE}/statistics/fighters?char={ch}&page=all"
-        print(f"Fetching fighter list for {ch.upper()}...")
-        soup = get_soup(url)
-
-        rows = soup.select("tr.b-statistics__table-row")
-        for row in rows:
-            links = row.select("a.b-link.b-link_style_black")
-            if len(links) < 2:
-                continue
-
-            first_name = clean_text(links[0].get_text())
-            last_name = clean_text(links[1].get_text())
-            href = links[0].get("href") or links[1].get("href")
-
-            if not href or "fighter-details" not in href:
-                continue
-
-            full_name = f"{first_name} {last_name}".strip()
-            if not full_name:
-                continue
-
-            if href in seen:
-                continue
-
-            seen.add(href)
-            fighters.append({
-                "name": full_name,
-                "first_name": first_name,
-                "last_name": last_name,
-                "profile_url": href,
-            })
-
-        time.sleep(0.25)
-
-    return fighters
-
-
-def parse_bio_stats(soup: BeautifulSoup) -> Dict[str, Optional[str]]:
-    result = {
-        "height": None,
-        "weight": None,
-        "reach": None,
-        "stance": None,
-        "dob": None,
-    }
-
-    items = soup.select("li.b-list__box-list-item")
-    for li in items:
-        text = clean_text(li.get_text(" "))
-        low = text.lower()
-
-        if "height:" in low:
-            result["height"] = text.split(":", 1)[1].strip()
-        elif "weight:" in low:
-            result["weight"] = text.split(":", 1)[1].strip()
-        elif "reach:" in low:
-            result["reach"] = text.split(":", 1)[1].strip()
-        elif "stance:" in low:
-            result["stance"] = text.split(":", 1)[1].strip()
-        elif "dob:" in low:
-            result["dob"] = text.split(":", 1)[1].strip()
-
-    return result
-
-
-def parse_performance_stats(soup: BeautifulSoup) -> Dict[str, Optional[float]]:
-    stats = {
-        "slpm": None,
-        "str_acc": None,
-        "sapm": None,
-        "str_def": None,
-        "td_avg": None,
-        "td_acc": None,
-        "td_def": None,
-        "sub_avg": None,
-    }
-
-    items = soup.select("li.b-list__box-list-item")
-    for li in items:
-        text = clean_text(li.get_text(" "))
-        low = text.lower()
-
-        if "slpm:" in low:
-            stats["slpm"] = parse_float(text.split(":", 1)[1])
-        elif "str. acc.:" in low or "str acc:" in low:
-            stats["str_acc"] = parse_pct(text.split(":", 1)[1])
-        elif "sapm:" in low:
-            stats["sapm"] = parse_float(text.split(":", 1)[1])
-        elif "str. def:" in low or "str def:" in low:
-            stats["str_def"] = parse_pct(text.split(":", 1)[1])
-        elif "td avg.:" in low or "td avg:" in low:
-            stats["td_avg"] = parse_float(text.split(":", 1)[1])
-        elif "td acc.:" in low or "td acc:" in low:
-            stats["td_acc"] = parse_pct(text.split(":", 1)[1])
-        elif "td def.:" in low or "td def:" in low:
-            stats["td_def"] = parse_pct(text.split(":", 1)[1])
-        elif "sub. avg.:" in low or "sub avg:" in low:
-            stats["sub_avg"] = parse_float(text.split(":", 1)[1])
-
-    return stats
-
-
-def normalize_method(method_text: str) -> str:
-    m = method_text.lower()
-    if "ko/tko" in m or "tko" in m or "ko" in m:
-        return "ko"
-    if "submission" in m:
-        return "sub"
-    if "decision" in m:
-        return "dec"
-    return "other"
-
-
-def parse_fight_history(soup: BeautifulSoup) -> Dict[str, int]:
-    summary = {
-        "total_fights": 0,
-        "wins": 0,
-        "losses": 0,
-        "draws": 0,
-        "ko_wins": 0,
-        "sub_wins": 0,
-        "dec_wins": 0,
-    }
-
-    rows = soup.select("tr.b-fight-details__table-row")
-    for row in rows:
-        cols = row.select("td")
-        if len(cols) < 8:
-            continue
-
-        row_text = clean_text(row.get_text(" "))
-        if not row_text:
-            continue
-
-        summary["total_fights"] += 1
-
-        result_cell = clean_text(cols[0].get_text(" "))
-        method_cell = clean_text(cols[7].get_text(" ")) if len(cols) > 7 else ""
-
-        result_low = result_cell.lower()
-        method_norm = normalize_method(method_cell)
-
-        if result_low.startswith("win") or result_low == "w":
-            summary["wins"] += 1
-            if method_norm == "ko":
-                summary["ko_wins"] += 1
-            elif method_norm == "sub":
-                summary["sub_wins"] += 1
-            elif method_norm == "dec":
-                summary["dec_wins"] += 1
-        elif result_low.startswith("loss") or result_low == "l":
-            summary["losses"] += 1
         else:
-            summary["draws"] += 1
+            debug_info["data_type"] = str(type(data))
 
-    return summary
+        if fighter_list:
+            first_item = fighter_list[0]
+            if isinstance(first_item, dict):
+                debug_info["sample_keys"] = list(first_item.keys())[:25]
+                debug_info["sample_item"] = {
+                    k: first_item[k] for k in list(first_item.keys())[:10]
+                }
+            else:
+                debug_info["sample_item"] = str(first_item)
+
+    for fighter in fighter_list:
+        if not isinstance(fighter, dict):
+            continue
+
+        name = build_fighter_name(fighter)
+        if not name:
+            continue
+
+        fighter["name"] = name
+        fighters[name] = fighter
+
+    debug_info["loaded_count"] = len(fighters)
+
+except Exception as e:
+    debug_info["error"] = str(e)
 
 
-def compute_rates(f: FighterRecord) -> FighterRecord:
-    if f.wins > 0:
-        f.ko_rate = round(f.ko_wins / f.wins, 4)
-        f.sub_rate = round(f.sub_wins / f.wins, 4)
-        f.decision_rate = round(f.dec_wins / f.wins, 4)
-        f.finish_rate = round((f.ko_wins + f.sub_wins) / f.wins, 4)
-    return f
+def clamp(value, low, high):
+    return max(low, min(high, value))
 
 
-def parse_fighter(fighter_meta: Dict[str, str]) -> FighterRecord:
-    soup = get_soup(fighter_meta["profile_url"])
+def get_float(value, default=0.0):
+    try:
+        if value is None or value == "":
+            return default
+        return float(value)
+    except Exception:
+        return default
 
-    bio = parse_bio_stats(soup)
-    perf = parse_performance_stats(soup)
-    hist = parse_fight_history(soup)
 
-    fighter = FighterRecord(
-        name=fighter_meta["name"],
-        first_name=fighter_meta["first_name"],
-        last_name=fighter_meta["last_name"],
-        profile_url=fighter_meta["profile_url"],
-        height=bio["height"],
-        weight=bio["weight"],
-        reach=bio["reach"],
-        stance=bio["stance"],
-        dob=bio["dob"],
-        slpm=perf["slpm"],
-        str_acc=perf["str_acc"],
-        sapm=perf["sapm"],
-        str_def=perf["str_def"],
-        td_avg=perf["td_avg"],
-        td_acc=perf["td_acc"],
-        td_def=perf["td_def"],
-        sub_avg=perf["sub_avg"],
-        total_fights=hist["total_fights"],
-        wins=hist["wins"],
-        losses=hist["losses"],
-        draws=hist["draws"],
-        ko_wins=hist["ko_wins"],
-        sub_wins=hist["sub_wins"],
-        dec_wins=hist["dec_wins"],
+def normalize_fighter_stats(f):
+    slpm = get_float(f.get("slpm"), 2.5)
+    sapm = get_float(f.get("sapm"), 2.5)
+    str_acc = get_float(f.get("str_acc"), 45.0)
+    str_def = get_float(f.get("str_def"), 50.0)
+    td_avg = get_float(f.get("td_avg"), 0.5)
+    td_acc = get_float(f.get("td_acc"), 35.0)
+    td_def = get_float(f.get("td_def"), 55.0)
+    sub_avg = get_float(f.get("sub_avg"), 0.2)
+
+    total_fights = int(get_float(f.get("total_fights"), 1))
+    wins = int(get_float(f.get("wins"), 0))
+
+    ko_rate = get_float(f.get("ko_rate"), 0.20)
+    sub_rate = get_float(f.get("sub_rate"), 0.10)
+    decision_rate = get_float(f.get("decision_rate"), 0.70)
+
+    win_rate = wins / total_fights if total_fights > 0 else 0.5
+    experience_factor = clamp(total_fights / 20.0, 0.4, 1.2)
+
+    return {
+        "name": f.get("name", "Unknown"),
+        "slpm": slpm,
+        "sapm": sapm,
+        "str_acc": str_acc,
+        "str_def": str_def,
+        "td_avg": td_avg,
+        "td_acc": td_acc,
+        "td_def": td_def,
+        "sub_avg": sub_avg,
+        "ko_rate": ko_rate,
+        "sub_rate": sub_rate,
+        "decision_rate": decision_rate,
+        "win_rate": win_rate,
+        "experience_factor": experience_factor,
+    }
+
+
+def build_matchup_probabilities(a_raw, b_raw, rounds):
+    a = normalize_fighter_stats(a_raw)
+    b = normalize_fighter_stats(b_raw)
+
+    a_strike_score = (
+        (a["slpm"] * (a["str_acc"] / 100.0))
+        - (b["sapm"] * (b["str_def"] / 100.0))
+    )
+    b_strike_score = (
+        (b["slpm"] * (b["str_acc"] / 100.0))
+        - (a["sapm"] * (a["str_def"] / 100.0))
     )
 
-    return compute_rates(fighter)
+    a_grapple_score = (a["td_avg"] * (a["td_acc"] / 100.0)) - (b["td_def"] / 100.0)
+    b_grapple_score = (b["td_avg"] * (b["td_acc"] / 100.0)) - (a["td_def"] / 100.0)
+
+    a_total = (
+        a_strike_score * 1.2
+        + a_grapple_score * 0.9
+        + a["win_rate"] * 1.0
+        + a["experience_factor"] * 0.5
+    )
+    b_total = (
+        b_strike_score * 1.2
+        + b_grapple_score * 0.9
+        + b["win_rate"] * 1.0
+        + b["experience_factor"] * 0.5
+    )
+
+    raw_a = max(0.05, a_total + 2.5)
+    raw_b = max(0.05, b_total + 2.5)
+    total = raw_a + raw_b
+
+    a_win_prob = raw_a / total
+    b_win_prob = raw_b / total
+
+    if rounds == 5:
+        finish_multiplier = 1.08
+        decision_multiplier = 1.05
+    else:
+        finish_multiplier = 1.00
+        decision_multiplier = 1.00
+
+    a_ko_weight = max(0.01, a["ko_rate"] * (1 + max(0, a_strike_score) * 0.10)) * finish_multiplier
+    a_sub_weight = max(0.01, a["sub_rate"] * (1 + max(0, a_grapple_score) * 0.15)) * finish_multiplier
+    a_dec_weight = max(0.01, a["decision_rate"]) * decision_multiplier
+
+    b_ko_weight = max(0.01, b["ko_rate"] * (1 + max(0, b_strike_score) * 0.10)) * finish_multiplier
+    b_sub_weight = max(0.01, b["sub_rate"] * (1 + max(0, b_grapple_score) * 0.15)) * finish_multiplier
+    b_dec_weight = max(0.01, b["decision_rate"]) * decision_multiplier
+
+    a_method_total = a_ko_weight + a_sub_weight + a_dec_weight
+    b_method_total = b_ko_weight + b_sub_weight + b_dec_weight
+
+    return {
+        f'{a["name"]} KO/TKO': a_win_prob * (a_ko_weight / a_method_total),
+        f'{a["name"]} Submission': a_win_prob * (a_sub_weight / a_method_total),
+        f'{a["name"]} Decision': a_win_prob * (a_dec_weight / a_method_total),
+        f'{b["name"]} KO/TKO': b_win_prob * (b_ko_weight / b_method_total),
+        f'{b["name"]} Submission': b_win_prob * (b_sub_weight / b_method_total),
+        f'{b["name"]} Decision': b_win_prob * (b_dec_weight / b_method_total),
+    }
 
 
-def build_database() -> List[Dict]:
-    fighter_meta_list = get_all_fighters()
-    data = []
-    total = len(fighter_meta_list)
-
-    for i, fighter_meta in enumerate(fighter_meta_list, start=1):
-        try:
-            fighter = parse_fighter(fighter_meta)
-            data.append(asdict(fighter))
-            print(f"[{i}/{total}] OK - {fighter.name}")
-        except Exception as e:
-            print(f"[{i}/{total}] FAIL - {fighter_meta['profile_url']} - {e}")
-
-        time.sleep(0.3)
-
-    return data
+def simulate_fight(fighter_a, fighter_b, rounds):
+    probs = build_matchup_probabilities(fighters[fighter_a], fighters[fighter_b], rounds)
+    outcomes = list(probs.keys())
+    weights = list(probs.values())
+    return random.choices(outcomes, weights=weights, k=1)[0]
 
 
-def main():
-    data = build_database()
+def monte_carlo(fighter_a, fighter_b, rounds, runs):
+    method_counts = {
+        f"{fighter_a} KO/TKO": 0,
+        f"{fighter_a} Submission": 0,
+        f"{fighter_a} Decision": 0,
+        f"{fighter_b} KO/TKO": 0,
+        f"{fighter_b} Submission": 0,
+        f"{fighter_b} Decision": 0,
+    }
 
-    with open("fighters.json", "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
+    for _ in range(runs):
+        outcome = simulate_fight(fighter_a, fighter_b, rounds)
+        method_counts[outcome] += 1
 
-    print(f"Saved {len(data)} fighters to fighters.json")
+    method_percentages = {
+        outcome: round((count / runs) * 100, 2)
+        for outcome, count in method_counts.items()
+    }
 
+    fighter_a_win_pct = round(
+        method_percentages[f"{fighter_a} KO/TKO"]
+        + method_percentages[f"{fighter_a} Submission"]
+        + method_percentages[f"{fighter_a} Decision"],
+        2
+    )
+    fighter_b_win_pct = round(
+        method_percentages[f"{fighter_b} KO/TKO"]
+        + method_percentages[f"{fighter_b} Submission"]
+        + method_percentages[f"{fighter_b} Decision"],
+        2
+    )
+
+    ranked_methods = dict(
+        sorted(method_percentages.items(), key=lambda x: x[1], reverse=True)
+    )
+
+    return {
+        "fight": f"{fighter_a} vs {fighter_b}",
+        "rounds": rounds,
+        "simulations": runs,
+        "win_percentages": {
+            fighter_a: fighter_a_win_pct,
+            fighter_b: fighter_b_win_pct
+        },
+        "method_breakdown": ranked_methods
+    }
+
+
+HOME_HTML = """
+<!DOCTYPE html>
+<html>
+<head>
+    <title>UFC Sim</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        body { font-family: Arial, sans-serif; background: #0b0d12; color: white; margin: 0; padding: 40px 20px; }
+        .wrap { max-width: 900px; margin: 0 auto; }
+        h1 { margin-top: 0; font-size: 48px; }
+        p { color: #b9c0cc; }
+        form { background: #161a22; padding: 24px; border-radius: 16px; margin-top: 20px; }
+        label { display: block; margin-bottom: 8px; font-weight: bold; }
+        select, input, button { width: 100%; padding: 14px; margin-bottom: 18px; border-radius: 10px; border: none; font-size: 16px; }
+        button { background: #ff9800; color: black; font-weight: bold; cursor: pointer; }
+        .debug { margin-top: 24px; background: #161a22; padding: 18px; border-radius: 16px; }
+        .debug pre { white-space: pre-wrap; word-break: break-word; color: #9fd3ff; }
+    </style>
+</head>
+<body>
+    <div class="wrap">
+        <h1>UFC Fight Simulator</h1>
+        <p>Fighters in database: <strong>{{ fighter_count }}</strong></p>
+
+        <form action="/simulate" method="get">
+            <label for="fighter_a">Fighter A</label>
+            <select name="fighter_a" id="fighter_a">
+                {% for fighter in fighter_names %}
+                <option value="{{ fighter }}">{{ fighter }}</option>
+                {% endfor %}
+            </select>
+
+            <label for="fighter_b">Fighter B</label>
+            <select name="fighter_b" id="fighter_b">
+                {% for fighter in fighter_names %}
+                <option value="{{ fighter }}">{{ fighter }}</option>
+                {% endfor %}
+            </select>
+
+            <label for="rounds">Rounds</label>
+            <select name="rounds" id="rounds">
+                <option value="3">3 Rounds</option>
+                <option value="5">5 Rounds</option>
+            </select>
+
+            <label for="runs">Simulations</label>
+            <input type="number" name="runs" id="runs" value="100000" min="1000" step="1000">
+
+            <button type="submit">Run Simulation</button>
+        </form>
+
+        <div class="debug">
+            <h3>Debug</h3>
+            <pre>{{ debug_info }}</pre>
+        </div>
+    </div>
+</body>
+</html>
+"""
+
+@app.route("/")
+def home():
+    fighter_names = sorted(fighters.keys())
+    return render_template_string(
+        HOME_HTML,
+        fighter_names=fighter_names,
+        fighter_count=len(fighter_names),
+        debug_info=json.dumps(debug_info, indent=2),
+    )
+
+@app.route("/simulate")
+def simulate():
+    fighter_a = request.args.get("fighter_a")
+    fighter_b = request.args.get("fighter_b")
+    rounds = int(request.args.get("rounds", 3))
+    runs = int(request.args.get("runs", 100000))
+
+    if fighter_a not in fighters or fighter_b not in fighters:
+        return jsonify({
+            "error": "fighter not found",
+            "available_fighters_sample": sorted(list(fighters.keys()))[:25],
+            "debug": debug_info
+        }), 400
+
+    if fighter_a == fighter_b:
+        return jsonify({"error": "fighter_a and fighter_b must be different"}), 400
+
+    if rounds not in [3, 5]:
+        return jsonify({"error": "rounds must be 3 or 5"}), 400
+
+    if runs <= 0:
+        return jsonify({"error": "runs must be greater than 0"}), 400
+
+    results = monte_carlo(fighter_a, fighter_b, rounds, runs)
+    return jsonify(results)
 
 if __name__ == "__main__":
-    main()
+    app.run(host="0.0.0.0", port=10000)
