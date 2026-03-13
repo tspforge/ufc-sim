@@ -5,28 +5,59 @@ import random
 
 app = Flask(__name__)
 
-# --------------------------------------------------
-# Load fighter database
-# --------------------------------------------------
 DB_FILE = "fighters.json"
 
-if os.path.exists(DB_FILE):
-    with open(DB_FILE, "r", encoding="utf-8") as f:
-        data = json.load(f)
-
-        # handle both formats
-        if isinstance(data, dict) and "fighters" in data:
-            fighter_list = data["fighters"]
-        else:
-            fighter_list = data
-else:
-    fighter_list = []
-
+# --------------------------------------------------
+# Load fighter database with debugging
+# --------------------------------------------------
+fighter_list = []
 fighters = {}
-for fighter in fighter_list:
-    name = fighter.get("name")
-    if name:
-        fighters[name] = fighter
+debug_info = {
+    "db_file": DB_FILE,
+    "cwd": os.getcwd(),
+    "file_exists": os.path.exists(DB_FILE),
+    "file_size": 0,
+    "data_type": "none",
+    "raw_count": 0,
+    "loaded_count": 0,
+    "error": "",
+    "repo_files": sorted(os.listdir(".")),
+}
+
+try:
+    if os.path.exists(DB_FILE):
+        debug_info["file_size"] = os.path.getsize(DB_FILE)
+
+        with open(DB_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        if isinstance(data, list):
+            fighter_list = data
+            debug_info["data_type"] = "list"
+            debug_info["raw_count"] = len(data)
+
+        elif isinstance(data, dict):
+            debug_info["data_type"] = "dict"
+            if "fighters" in data and isinstance(data["fighters"], list):
+                fighter_list = data["fighters"]
+                debug_info["raw_count"] = len(fighter_list)
+            else:
+                debug_info["raw_count"] = len(data)
+
+        else:
+            debug_info["data_type"] = str(type(data))
+
+    for fighter in fighter_list:
+        if isinstance(fighter, dict):
+            name = fighter.get("name")
+            if name:
+                fighters[name] = fighter
+
+    debug_info["loaded_count"] = len(fighters)
+
+except Exception as e:
+    debug_info["error"] = str(e)
+
 
 # --------------------------------------------------
 # Helpers
@@ -45,9 +76,6 @@ def get_float(value, default=0.0):
 
 
 def normalize_fighter_stats(f):
-    """
-    Convert scraped stats into model-friendly values.
-    """
     slpm = get_float(f.get("slpm"), 2.5)
     sapm = get_float(f.get("sapm"), 2.5)
     str_acc = get_float(f.get("str_acc"), 45.0)
@@ -65,7 +93,6 @@ def normalize_fighter_stats(f):
     decision_rate = get_float(f.get("decision_rate"), 0.70)
     finish_rate = get_float(f.get("finish_rate"), ko_rate + sub_rate)
 
-    # Basic quality / experience factor
     win_rate = wins / total_fights if total_fights > 0 else 0.5
     experience_factor = clamp(total_fights / 20.0, 0.4, 1.2)
 
@@ -85,22 +112,13 @@ def normalize_fighter_stats(f):
         "finish_rate": finish_rate,
         "win_rate": win_rate,
         "experience_factor": experience_factor,
-        "total_fights": total_fights,
-        "wins": wins,
-        "losses": int(get_float(f.get("losses"), 0)),
-        "draws": int(get_float(f.get("draws"), 0)),
     }
 
 
 def build_matchup_probabilities(a_raw, b_raw, rounds):
-    """
-    Derive win/method probabilities from real stats.
-    This is still a simplified model, but much better than hardcoded values.
-    """
     a = normalize_fighter_stats(a_raw)
     b = normalize_fighter_stats(b_raw)
 
-    # Striking advantage
     a_strike_score = (
         (a["slpm"] * (a["str_acc"] / 100.0))
         - (b["sapm"] * (b["str_def"] / 100.0))
@@ -110,11 +128,9 @@ def build_matchup_probabilities(a_raw, b_raw, rounds):
         - (a["sapm"] * (a["str_def"] / 100.0))
     )
 
-    # Grappling advantage
     a_grapple_score = (a["td_avg"] * (a["td_acc"] / 100.0)) - (b["td_def"] / 100.0)
     b_grapple_score = (b["td_avg"] * (b["td_acc"] / 100.0)) - (a["td_def"] / 100.0)
 
-    # Base total strength
     a_total = (
         a_strike_score * 1.2
         + a_grapple_score * 0.9
@@ -129,7 +145,6 @@ def build_matchup_probabilities(a_raw, b_raw, rounds):
         + b["experience_factor"] * 0.5
     )
 
-    # Convert to relative win probabilities
     raw_a = max(0.05, a_total + 2.5)
     raw_b = max(0.05, b_total + 2.5)
     total = raw_a + raw_b
@@ -137,31 +152,25 @@ def build_matchup_probabilities(a_raw, b_raw, rounds):
     a_win_prob = raw_a / total
     b_win_prob = raw_b / total
 
-    # 5 rounds = slightly more finish opportunities and also more decision exposure for better fighters
     if rounds == 5:
-        a_finish_bias = 1.08
-        b_finish_bias = 1.08
-        a_decision_bias = 1.05
-        b_decision_bias = 1.05
+        finish_multiplier = 1.08
+        decision_multiplier = 1.05
     else:
-        a_finish_bias = 1.00
-        b_finish_bias = 1.00
-        a_decision_bias = 1.00
-        b_decision_bias = 1.00
+        finish_multiplier = 1.00
+        decision_multiplier = 1.00
 
-    # Method mix inside each fighter's win condition
-    a_ko_weight = max(0.01, a["ko_rate"] * (1 + max(0, a_strike_score) * 0.10)) * a_finish_bias
-    a_sub_weight = max(0.01, a["sub_rate"] * (1 + max(0, a_grapple_score) * 0.15)) * a_finish_bias
-    a_dec_weight = max(0.01, a["decision_rate"]) * a_decision_bias
+    a_ko_weight = max(0.01, a["ko_rate"] * (1 + max(0, a_strike_score) * 0.10)) * finish_multiplier
+    a_sub_weight = max(0.01, a["sub_rate"] * (1 + max(0, a_grapple_score) * 0.15)) * finish_multiplier
+    a_dec_weight = max(0.01, a["decision_rate"]) * decision_multiplier
 
-    b_ko_weight = max(0.01, b["ko_rate"] * (1 + max(0, b_strike_score) * 0.10)) * b_finish_bias
-    b_sub_weight = max(0.01, b["sub_rate"] * (1 + max(0, b_grapple_score) * 0.15)) * b_finish_bias
-    b_dec_weight = max(0.01, b["decision_rate"]) * b_decision_bias
+    b_ko_weight = max(0.01, b["ko_rate"] * (1 + max(0, b_strike_score) * 0.10)) * finish_multiplier
+    b_sub_weight = max(0.01, b["sub_rate"] * (1 + max(0, b_grapple_score) * 0.15)) * finish_multiplier
+    b_dec_weight = max(0.01, b["decision_rate"]) * decision_multiplier
 
     a_method_total = a_ko_weight + a_sub_weight + a_dec_weight
     b_method_total = b_ko_weight + b_sub_weight + b_dec_weight
 
-    probs = {
+    return {
         f'{a["name"]} KO/TKO': a_win_prob * (a_ko_weight / a_method_total),
         f'{a["name"]} Submission': a_win_prob * (a_sub_weight / a_method_total),
         f'{a["name"]} Decision': a_win_prob * (a_dec_weight / a_method_total),
@@ -169,8 +178,6 @@ def build_matchup_probabilities(a_raw, b_raw, rounds):
         f'{b["name"]} Submission': b_win_prob * (b_sub_weight / b_method_total),
         f'{b["name"]} Decision': b_win_prob * (b_dec_weight / b_method_total),
     }
-
-    return probs
 
 
 def simulate_fight(fighter_a, fighter_b, rounds):
@@ -229,9 +236,6 @@ def monte_carlo(fighter_a, fighter_b, rounds, runs):
     }
 
 
-# --------------------------------------------------
-# UI
-# --------------------------------------------------
 HOME_HTML = """
 <!DOCTYPE html>
 <html>
@@ -282,11 +286,16 @@ HOME_HTML = """
             font-weight: bold;
             cursor: pointer;
         }
-        .links {
-            margin-top: 30px;
+        .debug {
+            margin-top: 24px;
+            background: #161a22;
+            padding: 18px;
+            border-radius: 16px;
         }
-        a {
-            color: #7db7ff;
+        .debug pre {
+            white-space: pre-wrap;
+            word-break: break-word;
+            color: #9fd3ff;
         }
     </style>
 </head>
@@ -323,9 +332,9 @@ HOME_HTML = """
             <button type="submit">Run Simulation</button>
         </form>
 
-        <div class="links">
-            <p>Quick test:</p>
-            <a href="/simulate?fighter_a=Max Holloway&fighter_b=Charles Oliveira&rounds=5&runs=100000">Max Holloway vs Charles Oliveira</a>
+        <div class="debug">
+            <h3>Debug</h3>
+            <pre>{{ debug_info }}</pre>
         </div>
     </div>
 </body>
@@ -340,6 +349,7 @@ def home():
         HOME_HTML,
         fighter_names=fighter_names,
         fighter_count=len(fighter_names),
+        debug_info=json.dumps(debug_info, indent=2),
     )
 
 
@@ -353,23 +363,18 @@ def simulate():
     if fighter_a not in fighters or fighter_b not in fighters:
         return jsonify({
             "error": "fighter not found",
-            "available_fighters_sample": sorted(list(fighters.keys()))[:25]
+            "available_fighters_sample": sorted(list(fighters.keys()))[:25],
+            "debug": debug_info
         }), 400
 
     if fighter_a == fighter_b:
-        return jsonify({
-            "error": "fighter_a and fighter_b must be different"
-        }), 400
+        return jsonify({"error": "fighter_a and fighter_b must be different"}), 400
 
     if rounds not in [3, 5]:
-        return jsonify({
-            "error": "rounds must be 3 or 5"
-        }), 400
+        return jsonify({"error": "rounds must be 3 or 5"}), 400
 
     if runs <= 0:
-        return jsonify({
-            "error": "runs must be greater than 0"
-        }), 400
+        return jsonify({"error": "runs must be greater than 0"}), 400
 
     results = monte_carlo(fighter_a, fighter_b, rounds, runs)
     return jsonify(results)
