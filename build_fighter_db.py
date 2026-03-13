@@ -10,7 +10,7 @@ from bs4 import BeautifulSoup
 
 BASE = "http://ufcstats.com"
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0 Safari/537.36"
+    "User-Agent": "Mozilla/5.0"
 }
 
 
@@ -95,7 +95,7 @@ def get_all_fighter_links() -> List[str]:
                 seen.add(href)
                 links.append(href)
 
-        time.sleep(0.3)
+        time.sleep(0.25)
 
     return links
 
@@ -150,12 +150,8 @@ def parse_performance_stats(soup: BeautifulSoup) -> Dict[str, Optional[float]]:
         "sub_avg": None,
     }
 
-    # UFCStats fighter page has labels in bold spans and values in same li
-    blocks = soup.select("li.b-list__box-list-item_type_block")
-    if not blocks:
-        blocks = soup.select("li.b-list__box-list-item")
-
-    for li in blocks:
+    items = soup.select("li.b-list__box-list-item")
+    for li in items:
         text = clean_text(li.get_text(" "))
         low = text.lower()
 
@@ -227,7 +223,6 @@ def parse_fight_history(soup: BeautifulSoup) -> Dict[str, int]:
                 summary["sub_wins"] += 1
             elif method_norm == "dec":
                 summary["dec_wins"] += 1
-
         elif result_low.startswith("loss") or result_low == "l":
             summary["losses"] += 1
         else:
@@ -284,12 +279,8 @@ def parse_fighter(url: str) -> FighterRecord:
     return compute_rates(fighter)
 
 
-def build_database(limit: Optional[int] = None) -> List[Dict]:
+def build_database() -> List[Dict]:
     links = get_all_fighter_links()
-
-    if limit:
-        links = links[:limit]
-
     data = []
     total = len(links)
 
@@ -301,22 +292,18 @@ def build_database(limit: Optional[int] = None) -> List[Dict]:
         except Exception as e:
             print(f"[{i}/{total}] FAIL - {url} - {e}")
 
-        time.sleep(0.35)
+        time.sleep(0.3)
 
     return data
 
 
 def main():
-    # Change limit=None to scrape everyone.
-    # Use a smaller number like 50 or 100 for testing first.
-    limit = 100
-
-    data = build_database(limit=limit)
+    data = build_database()
 
     with open("fighters.json", "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
 
-    print(f"\nSaved {len(data)} fighters to fighters.json")
+    print(f"Saved {len(data)} fighters to fighters.json")
 
 
 if __name__ == "__main__":
