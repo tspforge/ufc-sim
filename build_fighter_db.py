@@ -255,14 +255,32 @@ def compute_rates(f: FighterRecord) -> FighterRecord:
 def parse_fighter(fighter_meta: Dict[str, str]) -> FighterRecord:
     soup = get_soup(fighter_meta["profile_url"])
 
+    # IMPORTANT: trust the name from the A-Z fighter list page
+    full_name = fighter_meta["name"]
+    first_name = fighter_meta["first_name"]
+    last_name = fighter_meta["last_name"]
+
+    # Fallback if needed
+    if not full_name:
+        name_tag = soup.find("span", class_="b-content__title-highlight")
+        if name_tag:
+            full_name = clean_text(name_tag.get_text())
+            parts = full_name.split()
+            if len(parts) == 1:
+                first_name = parts[0]
+                last_name = ""
+            elif len(parts) >= 2:
+                first_name = parts[0]
+                last_name = " ".join(parts[1:])
+
     bio = parse_bio_stats(soup)
     perf = parse_performance_stats(soup)
     hist = parse_fight_history(soup)
 
     fighter = FighterRecord(
-        name=fighter_meta["name"],
-        first_name=fighter_meta["first_name"],
-        last_name=fighter_meta["last_name"],
+        name=full_name,
+        first_name=first_name,
+        last_name=last_name,
         profile_url=fighter_meta["profile_url"],
         height=bio["height"],
         weight=bio["weight"],
