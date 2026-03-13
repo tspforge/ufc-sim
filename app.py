@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, render_template_string
+from flask import Flask, request, render_template_string
 import json
 import os
 import random
@@ -23,6 +23,7 @@ debug_info = {
     "repo_files": sorted(os.listdir(".")),
 }
 
+
 def build_fighter_name(fighter):
     if not isinstance(fighter, dict):
         return ""
@@ -45,6 +46,7 @@ def build_fighter_name(fighter):
         return combined
 
     return ""
+
 
 try:
     if os.path.exists(DB_FILE):
@@ -250,8 +252,10 @@ def monte_carlo(fighter_a, fighter_b, rounds, runs):
         2
     )
 
-    ranked_methods = dict(
-        sorted(method_percentages.items(), key=lambda x: x[1], reverse=True)
+    ranked_methods = sorted(
+        method_percentages.items(),
+        key=lambda x: x[1],
+        reverse=True
     )
 
     return {
@@ -273,16 +277,67 @@ HOME_HTML = """
     <title>UFC Sim</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <style>
-        body { font-family: Arial, sans-serif; background: #0b0d12; color: white; margin: 0; padding: 40px 20px; }
-        .wrap { max-width: 900px; margin: 0 auto; }
-        h1 { margin-top: 0; font-size: 48px; }
-        p { color: #b9c0cc; }
-        form { background: #161a22; padding: 24px; border-radius: 16px; margin-top: 20px; }
-        label { display: block; margin-bottom: 8px; font-weight: bold; }
-        select, input, button { width: 100%; padding: 14px; margin-bottom: 18px; border-radius: 10px; border: none; font-size: 16px; }
-        button { background: #ff9800; color: black; font-weight: bold; cursor: pointer; }
-        .debug { margin-top: 24px; background: #161a22; padding: 18px; border-radius: 16px; }
-        .debug pre { white-space: pre-wrap; word-break: break-word; color: #9fd3ff; }
+        body {
+            font-family: Arial, sans-serif;
+            background: #0b0d12;
+            color: white;
+            margin: 0;
+            padding: 40px 20px;
+        }
+        .wrap {
+            max-width: 900px;
+            margin: 0 auto;
+        }
+        h1 {
+            margin-top: 0;
+            font-size: 48px;
+        }
+        p {
+            color: #b9c0cc;
+        }
+        form {
+            background: #161a22;
+            padding: 24px;
+            border-radius: 16px;
+            margin-top: 20px;
+        }
+        label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: bold;
+        }
+        input, select, button {
+            width: 100%;
+            padding: 14px;
+            margin-bottom: 18px;
+            border-radius: 10px;
+            border: none;
+            font-size: 16px;
+            box-sizing: border-box;
+        }
+        button {
+            background: #ff9800;
+            color: black;
+            font-weight: bold;
+            cursor: pointer;
+        }
+        .debug {
+            margin-top: 24px;
+            background: #161a22;
+            padding: 18px;
+            border-radius: 16px;
+        }
+        .debug pre {
+            white-space: pre-wrap;
+            word-break: break-word;
+            color: #9fd3ff;
+        }
+        .hint {
+            color: #8fa0b5;
+            margin-top: -10px;
+            margin-bottom: 18px;
+            font-size: 14px;
+        }
     </style>
 </head>
 <body>
@@ -292,18 +347,32 @@ HOME_HTML = """
 
         <form action="/simulate" method="get">
             <label for="fighter_a">Fighter A</label>
-            <select name="fighter_a" id="fighter_a">
-                {% for fighter in fighter_names %}
-                <option value="{{ fighter }}">{{ fighter }}</option>
-                {% endfor %}
-            </select>
+            <input
+                list="fighter-list"
+                name="fighter_a"
+                id="fighter_a"
+                placeholder="Start typing a fighter name..."
+                autocomplete="off"
+                required
+            >
 
             <label for="fighter_b">Fighter B</label>
-            <select name="fighter_b" id="fighter_b">
+            <input
+                list="fighter-list"
+                name="fighter_b"
+                id="fighter_b"
+                placeholder="Start typing a fighter name..."
+                autocomplete="off"
+                required
+            >
+
+            <datalist id="fighter-list">
                 {% for fighter in fighter_names %}
-                <option value="{{ fighter }}">{{ fighter }}</option>
+                <option value="{{ fighter }}">
                 {% endfor %}
-            </select>
+            </datalist>
+
+            <div class="hint">Type a few letters like “jon”, “islam”, or “pereira”.</div>
 
             <label for="rounds">Rounds</label>
             <select name="rounds" id="rounds">
@@ -326,6 +395,165 @@ HOME_HTML = """
 </html>
 """
 
+RESULT_HTML = """
+<!DOCTYPE html>
+<html>
+<head>
+    <title>UFC Sim Results</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background: #0b0d12;
+            color: white;
+            margin: 0;
+            padding: 40px 20px;
+        }
+        .wrap {
+            max-width: 980px;
+            margin: 0 auto;
+        }
+        h1 {
+            font-size: 46px;
+            margin: 0 0 10px;
+        }
+        .sub {
+            color: #9fb0c5;
+            margin-bottom: 28px;
+            font-size: 18px;
+        }
+        .topbar {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 18px;
+            margin-bottom: 24px;
+        }
+        .card {
+            background: #161a22;
+            border-radius: 18px;
+            padding: 22px;
+            box-shadow: 0 8px 24px rgba(0,0,0,.20);
+        }
+        .fighter-name {
+            font-size: 28px;
+            font-weight: 800;
+            margin-bottom: 10px;
+        }
+        .win-pct {
+            font-size: 54px;
+            font-weight: 900;
+            line-height: 1;
+            color: #ff9800;
+        }
+        .meta {
+            color: #9fb0c5;
+            margin-top: 8px;
+            font-size: 14px;
+        }
+        .section-title {
+            font-size: 24px;
+            font-weight: 800;
+            margin: 26px 0 14px;
+        }
+        .method-list {
+            display: grid;
+            gap: 12px;
+        }
+        .method-row {
+            background: #161a22;
+            border-radius: 14px;
+            padding: 16px 18px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 16px;
+        }
+        .method-name {
+            font-size: 18px;
+            font-weight: 700;
+        }
+        .method-pct {
+            font-size: 22px;
+            font-weight: 900;
+            color: #7cf29a;
+            white-space: nowrap;
+        }
+        .actions {
+            margin-top: 28px;
+            display: flex;
+            gap: 12px;
+            flex-wrap: wrap;
+        }
+        .btn {
+            display: inline-block;
+            background: #ff9800;
+            color: black;
+            text-decoration: none;
+            font-weight: 800;
+            padding: 14px 18px;
+            border-radius: 12px;
+        }
+        .btn.secondary {
+            background: #232835;
+            color: white;
+        }
+        @media (max-width: 700px) {
+            .topbar {
+                grid-template-columns: 1fr;
+            }
+            .win-pct {
+                font-size: 42px;
+            }
+            .fighter-name {
+                font-size: 24px;
+            }
+            .method-name {
+                font-size: 16px;
+            }
+            .method-pct {
+                font-size: 18px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="wrap">
+        <h1>{{ fight }}</h1>
+        <div class="sub">{{ rounds }} rounds • {{ simulations }} simulations</div>
+
+        <div class="topbar">
+            <div class="card">
+                <div class="fighter-name">{{ fighter_a }}</div>
+                <div class="win-pct">{{ fighter_a_win }}%</div>
+                <div class="meta">Overall win probability</div>
+            </div>
+
+            <div class="card">
+                <div class="fighter-name">{{ fighter_b }}</div>
+                <div class="win-pct">{{ fighter_b_win }}%</div>
+                <div class="meta">Overall win probability</div>
+            </div>
+        </div>
+
+        <div class="section-title">Method Breakdown</div>
+        <div class="method-list">
+            {% for method, pct in method_breakdown %}
+            <div class="method-row">
+                <div class="method-name">{{ method }}</div>
+                <div class="method-pct">{{ pct }}%</div>
+            </div>
+            {% endfor %}
+        </div>
+
+        <div class="actions">
+            <a class="btn" href="/">Run Another Simulation</a>
+            <a class="btn secondary" href="/simulate?fighter_a={{ fighter_a | urlencode }}&fighter_b={{ fighter_b | urlencode }}&rounds={{ rounds }}&runs={{ simulations }}&format=json">View JSON</a>
+        </div>
+    </div>
+</body>
+</html>
+"""
+
 @app.route("/")
 def home():
     fighter_names = sorted(fighters.keys())
@@ -342,25 +570,74 @@ def simulate():
     fighter_b = request.args.get("fighter_b")
     rounds = int(request.args.get("rounds", 3))
     runs = int(request.args.get("runs", 100000))
+    output_format = request.args.get("format", "").lower()
 
     if fighter_a not in fighters or fighter_b not in fighters:
-        return jsonify({
-            "error": "fighter not found",
-            "available_fighters_sample": sorted(list(fighters.keys()))[:25],
-            "debug": debug_info
-        }), 400
+        return render_template_string(
+            """
+            <html><body style="font-family:Arial;background:#0b0d12;color:white;padding:40px;">
+            <h1>Fighter not found</h1>
+            <p>Make sure you selected valid fighter names from the search box.</p>
+            <p><a href="/" style="color:#ff9800;">Go back</a></p>
+            </body></html>
+            """
+        ), 400
 
     if fighter_a == fighter_b:
-        return jsonify({"error": "fighter_a and fighter_b must be different"}), 400
+        return render_template_string(
+            """
+            <html><body style="font-family:Arial;background:#0b0d12;color:white;padding:40px;">
+            <h1>Invalid matchup</h1>
+            <p>Fighter A and Fighter B must be different.</p>
+            <p><a href="/" style="color:#ff9800;">Go back</a></p>
+            </body></html>
+            """
+        ), 400
 
     if rounds not in [3, 5]:
-        return jsonify({"error": "rounds must be 3 or 5"}), 400
+        return render_template_string(
+            """
+            <html><body style="font-family:Arial;background:#0b0d12;color:white;padding:40px;">
+            <h1>Invalid rounds</h1>
+            <p>Rounds must be 3 or 5.</p>
+            <p><a href="/" style="color:#ff9800;">Go back</a></p>
+            </body></html>
+            """
+        ), 400
 
     if runs <= 0:
-        return jsonify({"error": "runs must be greater than 0"}), 400
+        return render_template_string(
+            """
+            <html><body style="font-family:Arial;background:#0b0d12;color:white;padding:40px;">
+            <h1>Invalid simulation count</h1>
+            <p>Simulation count must be greater than 0.</p>
+            <p><a href="/" style="color:#ff9800;">Go back</a></p>
+            </body></html>
+            """
+        ), 400
 
     results = monte_carlo(fighter_a, fighter_b, rounds, runs)
-    return jsonify(results)
+
+    if output_format == "json":
+        return {
+            "fight": results["fight"],
+            "rounds": results["rounds"],
+            "simulations": results["simulations"],
+            "win_percentages": results["win_percentages"],
+            "method_breakdown": {k: v for k, v in results["method_breakdown"]}
+        }
+
+    return render_template_string(
+        RESULT_HTML,
+        fight=results["fight"],
+        rounds=results["rounds"],
+        simulations=results["simulations"],
+        fighter_a=fighter_a,
+        fighter_b=fighter_b,
+        fighter_a_win=results["win_percentages"][fighter_a],
+        fighter_b_win=results["win_percentages"][fighter_b],
+        method_breakdown=results["method_breakdown"],
+    )
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
