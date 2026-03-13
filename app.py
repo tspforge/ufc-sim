@@ -12,7 +12,13 @@ DB_FILE = "fighters.json"
 
 if os.path.exists(DB_FILE):
     with open(DB_FILE, "r", encoding="utf-8") as f:
-        fighter_list = json.load(f)
+        data = json.load(f)
+
+        # handle both formats
+        if isinstance(data, dict) and "fighters" in data:
+            fighter_list = data["fighters"]
+        else:
+            fighter_list = data
 else:
     fighter_list = []
 
