@@ -80,8 +80,17 @@ def parse_float(text: str) -> Optional[float]:
         return None
 
 
-def get_all_fighter_links() -> List[str]:
-    links = []
+def split_name(full_name: str) -> tuple[str, str]:
+    parts = full_name.strip().split()
+    if not parts:
+        return "", ""
+    if len(parts) == 1:
+        return parts[0], ""
+    return parts[0], " ".join(parts[1:])
+
+
+def get_all_fighters() -> List[Dict[str, str]]:
+    fighters = []
     seen = set()
 
     for ch in string.ascii_lowercase:
@@ -89,35 +98,47 @@ def get_all_fighter_links() -> List[str]:
         print(f"Fetching fighter list for {ch.upper()}...")
         soup = get_soup(url)
 
-        for a in soup.select("a.b-link.b-link_style_black"):
-            href = a.get("href")
-            if href and "fighter-details" in href and href not in seen:
-                seen.add(href)
-                links.append(href)
+        rows = soup.select("tr.b-statistics__table-row")
+        for row in rows:
+            links = row.select("a.b-link.b-link_style_black")
+            if len(links) < 2:
+                continue
+
+            first_name = clean_text(links[0].get_text())
+            last_name = clean_text(links[1].get_text())
+            href = links[0].get("href") or links[1].get("href")
+
+            if not href or "fighter-details" not in href:
+                continue
+
+            full_name = f"{first_name} {last_name}".strip()
+            if not full_name:
+                continue
+
+            if href in seen:
+                continue
+
+            seen.add(href)
+            fighters.append({
+                "name": full_name,
+                "first_name": first_name,
+                "last_name": last_name,
+                "profile_url": href,
+            })
 
         time.sleep(0.25)
 
-    return links
+    return fighters
 
 
 def parse_bio_stats(soup: BeautifulSoup) -> Dict[str, Optional[str]]:
     result = {
-        "first_name": "",
-        "last_name": "",
         "height": None,
         "weight": None,
         "reach": None,
         "stance": None,
         "dob": None,
     }
-
-    first = soup.select_one(".b-content__title-first")
-    last = soup.select_one(".b-content__title-last")
-
-    if first:
-        result["first_name"] = clean_text(first.get_text())
-    if last:
-        result["last_name"] = clean_text(last.get_text())
 
     items = soup.select("li.b-list__box-list-item")
     for li in items:
@@ -240,20 +261,18 @@ def compute_rates(f: FighterRecord) -> FighterRecord:
     return f
 
 
-def parse_fighter(url: str) -> FighterRecord:
-    soup = get_soup(url)
+def parse_fighter(fighter_meta: Dict[str, str]) -> FighterRecord:
+    soup = get_soup(fighter_meta["profile_url"])
 
     bio = parse_bio_stats(soup)
     perf = parse_performance_stats(soup)
     hist = parse_fight_history(soup)
 
-    full_name = f'{bio["first_name"]} {bio["last_name"]}'.strip()
-
     fighter = FighterRecord(
-        name=full_name,
-        first_name=bio["first_name"],
-        last_name=bio["last_name"],
-        profile_url=url,
+        name=fighter_meta["name"],
+        first_name=fighter_meta["first_name"],
+        last_name=fighter_meta["last_name"],
+        profile_url=fighter_meta["profile_url"],
         height=bio["height"],
         weight=bio["weight"],
         reach=bio["reach"],
@@ -280,17 +299,17 @@ def parse_fighter(url: str) -> FighterRecord:
 
 
 def build_database() -> List[Dict]:
-    links = get_all_fighter_links()
+    fighter_meta_list = get_all_fighters()
     data = []
-    total = len(links)
+    total = len(fighter_meta_list)
 
-    for i, url in enumerate(links, start=1):
+    for i, fighter_meta in enumerate(fighter_meta_list, start=1):
         try:
-            fighter = parse_fighter(url)
+            fighter = parse_fighter(fighter_meta)
             data.append(asdict(fighter))
             print(f"[{i}/{total}] OK - {fighter.name}")
         except Exception as e:
-            print(f"[{i}/{total}] FAIL - {url} - {e}")
+            print(f"[{i}/{total}] FAIL - {fighter_meta['profile_url']} - {e}")
 
         time.sleep(0.3)
 
